@@ -284,9 +284,19 @@ export class JiraProvider implements TicketingProvider {
         // else: orchestrator picked it up between query and our processing; skip.
       }
 
+      // maxInProgressAiIssues is a per-mapping cap, but cfg.jql is typically scoped
+      // to a whole Jira project, so the query returns in-flight issues for every
+      // repo in that project. Filter by the repo field the same way the candidate
+      // query above does — client-side, since the field may serialize as an option
+      // object or a bare string and JQL "=" does not work against a text field.
       const capacityJql = `(${cfg.jql}) AND ${statusJqlField} in (Planning, Implementing)`;
-      const capacityIssues = await this.client.searchJql(capacityJql, ["summary"]);
-      inProgressCountsByScope[scopeKey] = capacityIssues.length;
+      const capacityIssues = await this.client.searchJql(capacityJql, [
+        "summary",
+        fieldIds.repoFieldId,
+      ]);
+      inProgressCountsByScope[scopeKey] = capacityIssues.filter(
+        (raw) => readRepoFieldValue(raw.fields[fieldIds.repoFieldId]) === cfg.repoFieldValue,
+      ).length;
     }
 
     return { needsPlanning, readyForImplementation, inProgressCountsByScope, parentsToFinalize };

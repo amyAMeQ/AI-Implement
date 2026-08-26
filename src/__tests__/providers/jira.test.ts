@@ -443,6 +443,71 @@ describe("JiraProvider.fetchAIImplementSnapshot", () => {
     expect(snap.readyForImplementation).toEqual([]);
   });
 
+  it("counts capacity per mapping, not per Jira project, when two mappings share one JQL scope", async () => {
+    // Both mappings scope to `project = TEST`, so each one's capacity query sees
+    // the other's in-flight issues. maxInProgressAiIssues is per mapping, so each
+    // must count only the issues whose repo field is its own.
+    const inFlight = [
+      issue("20001", "P-10", "Implementing", "acme/x"),
+      issue("20002", "P-11", "Planning", "acme/y"),
+      issue("20003", "P-12", "Implementing", "acme/y"),
+    ];
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(FIELDS_RESPONSE)
+      .mockResolvedValueOnce(searchOk([])) // bucket, mapping acme/x
+      .mockResolvedValueOnce(searchOk(inFlight)) // capacity, mapping acme/x
+      .mockResolvedValueOnce(searchOk([])) // bucket, mapping acme/y
+      .mockResolvedValueOnce(searchOk(inFlight)); // capacity, mapping acme/y
+
+    const p = new JiraProvider({
+      client: new JiraClient({ token: "t", cloudId: "c-cap-shared" }),
+      cacheScope: "c-cap-shared", siteUrl: "https://x",
+      getMappings: () => ({
+        "acme/x": jiraMapping({ repoFieldValue: "acme/x" }),
+        "acme/y": jiraMapping({ repoFieldValue: "acme/y" }),
+      }),
+    });
+    const snap = await p.fetchAIImplementSnapshot();
+
+    expect(snap.inProgressCountsByScope).toEqual({ "acme/x": 1, "acme/y": 2 });
+  });
+
+  it("requests the repo field on the capacity query so it can filter by repo", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(FIELDS_RESPONSE)
+      .mockResolvedValueOnce(searchOk([]))
+      .mockResolvedValueOnce(searchOk([]));
+
+    const p = new JiraProvider({
+      client: new JiraClient({ token: "t", cloudId: "c-cap-fields" }),
+      cacheScope: "c-cap-fields", siteUrl: "https://x",
+      getMappings: () => ({ "acme/x": jiraMapping() }),
+    });
+    await p.fetchAIImplementSnapshot();
+
+    const capacityBody = JSON.parse(vi.mocked(fetch).mock.calls[2][1]?.body as string);
+    expect(capacityBody.fields).toContain("customfield_10101");
+  });
+
+  it("does not fire onRepoFieldMismatch for capacity-query rows belonging to another repo", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(FIELDS_RESPONSE)
+      .mockResolvedValueOnce(searchOk([]))
+      .mockResolvedValueOnce(searchOk([issue("20002", "P-11", "Planning", "acme/other")]));
+
+    const onRepoFieldMismatch = vi.fn();
+    const p = new JiraProvider({
+      client: new JiraClient({ token: "t", cloudId: "c-cap-quiet" }),
+      cacheScope: "c-cap-quiet", siteUrl: "https://x",
+      getMappings: () => ({ "acme/x": jiraMapping() }),
+      onRepoFieldMismatch,
+    });
+    const snap = await p.fetchAIImplementSnapshot();
+
+    expect(snap.inProgressCountsByScope).toEqual({ "acme/x": 0 });
+    expect(onRepoFieldMismatch).not.toHaveBeenCalled();
+  });
+
   it("filters out issues whose repo field doesn't match and fires onRepoFieldMismatch", async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(FIELDS_RESPONSE)
