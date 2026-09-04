@@ -1,0 +1,45 @@
+name: Sync fork main from upstream
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Fast-forward main from upstream
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fast-forward main from upstream/main
+        env:
+          UPSTREAM_REPO: BuildDownAI/AI-Implement
+          BRANCH: main
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream "${BRANCH}"
+
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse "upstream/${BRANCH}")" ]; then
+            echo "Already up to date with ${UPSTREAM_REPO}@${BRANCH}."
+            exit 0
+          fi
+
+          echo "Fast-forwarding ${BRANCH} to ${UPSTREAM_REPO}@${BRANCH}..."
+          git merge --ff-only "upstream/${BRANCH}"
+
+          echo "Pushing ${BRANCH} to origin..."
+          git push origin "${BRANCH}"
+
+          echo "Sync complete: $(git rev-parse --short HEAD)"
